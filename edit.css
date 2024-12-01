@@ -1,0 +1,94 @@
+/* Mengatur font dasar dan body */
+body {
+    font-family: 'Arial', sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: #f4f7fa; /* Warna latar belakang abu-abu muda */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh; /* Full height */
+}
+
+/* Mengatur kontainer utama */
+.container {
+    width: 350px;
+    padding: 30px;
+    background-color: #fff;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    text-align: center;
+    box-sizing: border-box;
+    border: 1px solid #e0e0e0;
+}
+
+/* Judul halaman */
+h1 {
+    color: #4CAF50;
+    font-size: 26px;
+    margin-bottom: 20px;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+/* Label form */
+label {
+    font-size: 16px;
+    font-weight: bold;
+    color: #333;
+    margin-bottom: 10px;
+    display: block;
+    text-align: left;
+}
+
+/* Input fields */
+input[type="text"], input[type="number"] {
+    width: 100%;
+    padding: 12px 15px;
+    margin: 10px 0 20px 0;
+    border: 2px solid #ccc;
+    border-radius: 8px;
+    box-sizing: border-box;
+    font-size: 16px;
+    color: #333;
+    transition: all 0.3s ease;
+}
+
+/* Efek focus pada input fields */
+input[type="text"]:focus, input[type="number"]:focus {
+    border-color: #4CAF50;
+    outline: none;
+    box-shadow: 0 0 8px rgba(76, 175, 80, 0.5);
+}
+
+/* Button submit */
+button[type="submit"] {
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    padding: 12px 20px;
+    font-size: 16px;
+    cursor: pointer;
+    border-radius: 8px;
+    transition: background-color 0.3s ease;
+    width: 100%;
+}
+
+button[type="submit"]:hover {
+    background-color: #45a049;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .container {
+        width: 90%;
+    }
+
+    h1 {
+        font-size: 24px;
+    }
+
+    input[type="text"], input[type="number"], button[type="submit"] {
+        font-size: 14px;
+    }
+}

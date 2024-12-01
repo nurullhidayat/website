@@ -1,0 +1,47 @@
+/* Tampilan halaman login */
+.login-container {
+    max-width: 400px;
+    margin: 0 auto;
+    padding: 30px;
+    background-color: #fff;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    border-radius: 10px;
+}
+
+.login-container h1 {
+    text-align: center;
+    font-size: 2rem;
+    color: #4CAF50;
+}
+
+.login-container form {
+    display: flex;
+    flex-direction: column;
+}
+
+.login-container label {
+    margin-bottom: 8px;
+    font-weight: bold;
+}
+
+.login-container input {
+    margin-bottom: 20px;
+    padding: 10px;
+    font-size: 1rem;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+}
+
+.login-container button {
+    padding: 10px;
+    font-size: 1rem;
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.login-container button:hover {
+    background-color: #388E3C;
+}

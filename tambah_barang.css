@@ -1,0 +1,86 @@
+/* Style Global */
+body {
+    font-family: Arial, sans-serif;
+    background-color: #f0f2f5;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+}
+
+/* Container Form */
+form {
+    background-color: #ffffff;
+    padding: 30px;
+    border-radius: 8px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    width: 100%;
+    max-width: 400px;
+    text-align: center;
+    box-sizing: border-box;
+}
+
+/* Heading */
+h1 {
+    margin-bottom: 20px;
+    font-size: 24px;
+    color: #4CAF50;
+}
+
+/* Label */
+label {
+    display: block;
+    font-size: 14px;
+    color: #555555;
+    margin-bottom: 8px;
+    text-align: left;
+}
+
+/* Input Fields */
+input {
+    width: 100%;
+    padding: 12px;
+    margin-bottom: 20px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 16px;
+    box-sizing: border-box;
+    transition: 0.3s ease;
+}
+
+input:focus {
+    border-color: #007bff;
+    box-shadow: 0 0 5px rgba(0, 123, 255, 0.2);
+    outline: none;
+}
+
+/* Button */
+button {
+    width: 100%;
+    padding: 12px;
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 16px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+button:hover {
+    background-color: #45a049;
+}
+
+/* Responsiveness */
+@media (max-width: 768px) {
+    form {
+        padding: 20px;
+        margin: 10px;
+    }
+
+    h1 {
+        font-size: 20px;
+    }
+}
