@@ -13,8 +13,8 @@
     .status{display:flex;gap:10px;align-items:center}.dot{width:10px;height:10px;border-radius:50%;background:#8091a7}.dot.ok{background:var(--ok)}.dot.bad{background:var(--bad)}
     .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.metric{padding:14px;border:1px solid var(--line);border-radius:12px}.metric b{display:block;font-size:22px;margin-top:5px}.metric span{color:var(--muted);font-size:13px}
     .tablewrap{overflow:auto}table{width:100%;border-collapse:collapse;min-width:650px}th,td{padding:11px 10px;text-align:left;border-bottom:1px solid var(--line)}th{color:var(--muted);font-size:12px;text-transform:uppercase}td.num{font-weight:800}.pill{display:inline-block;padding:4px 9px;border-radius:999px;border:1px solid var(--line);font-size:12px}
-    pre{white-space:pre-wrap;word-break:break-word;background:#07111f;border:1px solid var(--line);padding:14px;border-radius:12px;max-height:300px;overflow:auto;color:#b9cae0}
-    code{color:#bdd7ff}.warn{color:#ffd27a}.error{color:#ff8b8b}@media(max-width:700px){.grid{grid-template-columns:1fr}.top{align-items:flex-start}}
+    pre{white-space:pre-wrap;word-break:break-word;background:#07111f;border:1px solid var(--line);padding:14px;border-radius:12px;max-height:430px;overflow:auto;color:#b9cae0}
+    code{color:#bdd7ff}@media(max-width:700px){.grid{grid-template-columns:1fr}.top{align-items:flex-start}}
   </style>
 </head>
 <body>
@@ -23,23 +23,23 @@
   <section class="card"><div class="status"><span id="dot" class="dot"></span><strong id="status">Belum diperiksa</strong></div><p id="detail" class="sub">Klik Refresh History untuk memulai.</p></section>
   <section class="card"><div class="grid"><div class="metric"><span>History ditemukan</span><b id="count">0</b></div><div class="metric"><span>API host terdeteksi</span><b id="hosts">0</b></div><div class="metric"><span>Endpoint kandidat</span><b id="eps">0</b></div></div></section>
   <section class="card"><h2>Game History</h2><div class="tablewrap"><table><thead><tr><th>Period / Issue</th><th>Number</th><th>Size</th><th>Color</th><th>Premium</th></tr></thead><tbody id="rows"><tr><td colspan="5" class="sub">Belum ada data.</td></tr></tbody></table></div></section>
-  <section class="card"><h2>Diagnostik</h2><p class="sub">Bagian ini menunjukkan apa yang benar-benar ditemukan scraper. Tidak ada endpoint yang akan ditebak sebagai valid tanpa respons server.</p><pre id="diag">Belum ada diagnostik.</pre></section>
+  <section class="card"><h2>Diagnostik</h2><p class="sub">Menampilkan browser attempts dan request network yang benar-benar tertangkap.</p><pre id="diag">Belum ada diagnostik.</pre></section>
 </main>
 <script>
 const $=id=>document.getElementById(id);
 const size=n=>Number(n)<=4?'Small':'Big';
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 async function load(){
-  const btn=$('refresh'); btn.disabled=true; $('status').textContent='Memeriksa situs…'; $('dot').className='dot'; $('detail').textContent='Memindai HTML, bundle JavaScript, dan kandidat API history.';
+  const btn=$('refresh'); btn.disabled=true; $('status').textContent='Membuka WinGo di browser server…'; $('dot').className='dot'; $('detail').textContent='Menangkap Fetch/XHR dari halaman asli.';
   try{
-    const r=await fetch('/api/history?pageSize=20&pageNo=1',{cache:'no-store'}); const data=await r.json();
+    const r=await fetch('/api/history',{cache:'no-store'}); const data=await r.json();
     $('count').textContent=(data.history||[]).length; $('hosts').textContent=(data.detectedHosts||[]).length; $('eps').textContent=(data.detectedEndpoints||[]).length;
     if(data.history?.length){$('dot').className='dot ok';$('status').textContent='History berhasil dibaca';$('detail').textContent=data.source?`Sumber: ${data.source}`:'Data history ditemukan.'}
-    else{$('dot').className='dot bad';$('status').textContent='History belum berhasil dibaca';$('detail').textContent=data.message||'Lihat diagnostik untuk hasil pemeriksaan.'}
+    else{$('dot').className='dot bad';$('status').textContent='History belum berhasil dibaca';$('detail').textContent=data.message||'Lihat diagnostik.'}
     const rows=$('rows'); rows.innerHTML='';
     if(!data.history?.length) rows.innerHTML='<tr><td colspan="5" class="sub">Belum ada history yang terverifikasi.</td></tr>';
     for(const x of data.history||[]){const n=x.number;rows.insertAdjacentHTML('beforeend',`<tr><td><code>${esc(x.issueNumber||x.period||'-')}</code></td><td class="num">${esc(n)}</td><td><span class="pill">${esc(x.size||size(n))}</span></td><td>${esc(x.colour||x.color||'-')}</td><td>${esc(x.premium??'-')}</td></tr>`)}
-    $('diag').textContent=JSON.stringify({detectedHosts:data.detectedHosts,detectedEndpoints:data.detectedEndpoints,attempts:data.attempts,notes:data.notes},null,2);
+    $('diag').textContent=JSON.stringify({detectedHosts:data.detectedHosts,detectedEndpoints:data.detectedEndpoints,attempts:data.attempts,network:data.network,notes:data.notes},null,2);
   }catch(e){$('dot').className='dot bad';$('status').textContent='Error';$('detail').textContent=e.message;$('diag').textContent=e.stack||e.message}
   finally{btn.disabled=false}
 }
