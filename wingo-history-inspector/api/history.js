@@ -1,5 +1,5 @@
 const chromium = require('@sparticuz/chromium');
-const { chromium: playwrightChromium } = require('playwright-core');
+const puppeteer = require('puppeteer-core');
 
 const TARGET = 'https://55u3gpn.com/#/home/AllLotteryGames/WinGo?id=1';
 
@@ -36,21 +36,22 @@ module.exports = async function handler(req, res) {
   const notes = [];
 
   try {
-    browser = await playwrightChromium.launch({
-      args: chromium.args,
+    chromium.setGraphicsMode = false;
+    browser = await puppeteer.launch({
+      args: await puppeteer.defaultArgs({ args: chromium.args, headless: 'shell' }),
       executablePath: await chromium.executablePath(),
-      headless: true
+      headless: 'shell',
+      defaultViewport: { width: 1280, height: 900, deviceScaleFactor: 1 }
     });
 
-    const page = await browser.newPage({
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-      viewport: { width: 1280, height: 900 }
-    });
+    const page = await browser.newPage();
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36');
 
-    await page.route('**/*', async route => {
-      const rt = route.request().resourceType();
-      if (['image', 'font', 'media'].includes(rt)) return route.abort();
-      return route.continue();
+    await page.setRequestInterception(true);
+    page.on('request', request => {
+      const rt = request.resourceType();
+      if (['image', 'font', 'media'].includes(rt)) request.abort().catch(() => {});
+      else request.continue().catch(() => {});
     });
 
     page.on('response', async response => {
@@ -59,12 +60,13 @@ module.exports = async function handler(req, res) {
       if (!['xhr', 'fetch'].includes(reqType) && !/api|webapi|wingo|lottery|emerd|gameissue/i.test(url)) return;
       try {
         const status = response.status();
-        const ct = (response.headers()['content-type'] || '').toLowerCase();
+        const headers = response.headers();
+        const ct = (headers['content-type'] || '').toLowerCase();
         if (!ct.includes('json') && !/api|webapi/i.test(url)) return;
         const text = await response.text();
         let json = null;
         try { json = JSON.parse(text); } catch {}
-        let rows = json ? normalizeList(json) : [];
+        const rows = json ? normalizeList(json) : [];
         network.push({ url, status, type: reqType, rows: rows.length, preview: text.slice(0, 220) });
 
         try {
@@ -83,22 +85,25 @@ module.exports = async function handler(req, res) {
       }
     });
 
-    const nav = await page.goto(TARGET, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    const nav = await page.goto(TARGET, { waitUntil: 'domcontentloaded', timeout: 25000 });
     attempts.push({ kind: 'browser', url: TARGET, status: nav ? nav.status() : null, ok: !!nav });
 
-    // Give the SPA time to initialize and request game history.
-    await page.waitForTimeout(10000);
+    await new Promise(resolve => setTimeout(resolve, 10000));
 
-    // If history still isn't loaded, try clicking likely History/Game History tabs.
     if (!history.length) {
       const labels = ['Game History', 'History', 'My History'];
       for (const label of labels) {
         try {
-          const locator = page.getByText(label, { exact: false }).first();
-          if (await locator.count()) {
-            await locator.click({ timeout: 1500 });
-            await page.waitForTimeout(2500);
+          const clicked = await page.evaluate((txt) => {
+            const els = [...document.querySelectorAll('button,div,span,a')];
+            const el = els.find(x => (x.textContent || '').trim().toLowerCase().includes(txt.toLowerCase()));
+            if (!el) return false;
+            el.click();
+            return true;
+          }, label);
+          if (clicked) {
             attempts.push({ kind: 'click', label, ok: true });
+            await new Promise(resolve => setTimeout(resolve, 2500));
             if (history.length) break;
           }
         } catch (e) {
@@ -107,7 +112,6 @@ module.exports = async function handler(req, res) {
       }
     }
 
-    // DOM fallback: capture visible table-like rows if the response payload was transformed client-side.
     if (!history.length) {
       try {
         const domRows = await page.evaluate(() => {
@@ -127,7 +131,7 @@ module.exports = async function handler(req, res) {
 
     detectedHosts = [...new Set(detectedHosts)];
     detectedEndpoints = [...new Set(detectedEndpoints)];
-    if (!history.length) notes.push('Browser berhasil membuka SPA, tetapi belum menangkap response JSON yang terverifikasi sebagai history WinGo. Lihat network diagnostics untuk host/endpoint yang benar-benar dipanggil halaman.');
+    if (!history.length) notes.push('Browser berhasil berjalan tetapi history belum teridentifikasi. Gunakan network diagnostics untuk melihat host/endpoint yang dipanggil halaman.');
   } catch (e) {
     notes.push('Headless browser gagal dijalankan: ' + (e.message || String(e)));
     attempts.push({ kind: 'browser-error', error: e.stack || e.message || String(e) });
