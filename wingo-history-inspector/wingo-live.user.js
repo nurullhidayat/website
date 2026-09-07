@@ -1,23 +1,31 @@
 // ==UserScript==
 // @name         WinGo Live Sync
-// @namespace    https://wingo-history-inspector-gh238640-1159s-projects.vercel.app
-// @version      1.1.0
-// @description  Capture public WinGo history from your browser session and sync it live to the dashboard tab. No cookies/tokens are sent.
+// @namespace    https://wingo-history-inspector.vercel.app
+// @version      1.2.0
+// @description  Live WinGo history sync with Tampermonkey background polling from the dashboard. No login cookies or auth tokens are read.
 // @match        https://55u3gpn.com/*
+// @match        https://wingo-history-inspector.vercel.app/*
+// @match        https://wingo-history-inspector-gh238640-1159s-projects.vercel.app/*
 // @run-at       document-start
-// @grant        none
+// @grant        GM_xmlhttpRequest
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_addValueChangeListener
+// @connect      api.55fiveapi.com
+// @require      https://cdn.jsdelivr.net/npm/crypto-js@4.2.0/crypto-js.min.js
 // ==/UserScript==
 
 (() => {
   'use strict';
-  if (window.__wingoLiveSyncInstalled) return;
-  window.__wingoLiveSyncInstalled = true;
 
-  const DASH_URL = 'https://wingo-history-inspector-gh238640-1159s-projects.vercel.app/';
-  const DASH_ORIGIN = 'https://wingo-history-inspector-gh238640-1159s-projects.vercel.app';
-  let dashboardWindow = null;
-  let lastPayload = null;
-  let dashboardReady = false;
+  const API_URL = 'https://api.55fiveapi.com/api/webapi/GetNoaverageEmerdList';
+  const DASH_URL = 'https://wingo-history-inspector.vercel.app/';
+  const STORE_KEY = 'wingo_latest_payload_v2';
+  const isWinGo = location.hostname === '55u3gpn.com';
+  const isDashboard = location.hostname.includes('wingo-history-inspector');
+  let stopped = false;
+  let pollTimer = null;
+  let latestCount = 0;
 
   const pickList = (j) => {
     const candidates = [j?.data?.list, j?.data?.data?.list, j?.list, j?.data, j?.result?.list];
@@ -34,108 +42,122 @@
     })).filter(x => (x.issueNumber != null || x.period != null) && x.number != null);
   };
 
-  function postPayload(payload) {
-    if (!payload || !dashboardWindow || dashboardWindow.closed) return false;
+  function randomId() {
+    return 'xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, c => {
+      const r = Math.floor(Math.random() * 16);
+      const v = c === 'x' ? r : (r & 3) | 8;
+      return v.toString(16);
+    });
+  }
+
+  function signPayload(payload) {
+    const sorted = {};
+    Object.keys(payload).sort().forEach(k => {
+      const v = payload[k];
+      if (v !== null && v !== '') sorted[k] = v;
+    });
+    return CryptoJS.MD5(JSON.stringify(sorted)).toString().toUpperCase();
+  }
+
+  function makeBody() {
+    const body = { pageSize: 50, pageNo: 1, typeId: 30, language: 1, random: randomId() };
+    body.signature = signPayload(body);
+    body.timestamp = Math.floor(Date.now() / 1000);
+    return body;
+  }
+
+  function savePayload(rows, source, mode) {
+    if (!rows?.length) return;
+    latestCount = rows.length;
+    const payload = {
+      history: rows.slice(0, 100),
+      source,
+      mode,
+      capturedAt: new Date().toISOString()
+    };
+    GM_setValue(STORE_KEY, payload);
+    if (isDashboard) publishToPage(payload);
+    if (isWinGo) renderBadge();
+  }
+
+  function publishToPage(payload) {
     try {
-      dashboardWindow.postMessage({ type: 'WINGO_HISTORY_SYNC', payload }, DASH_ORIGIN);
-      return true;
-    } catch { return false; }
+      window.postMessage({ type: 'WINGO_TM_SYNC', payload }, location.origin);
+    } catch {}
   }
 
-  function sendToDashboard(payload) {
-    lastPayload = payload;
-    if (dashboardReady) postPayload(payload);
-    renderBadge(payload.history.length);
+  function pollApi() {
+    if (stopped || !isDashboard) return;
+    const body = makeBody();
+    GM_xmlhttpRequest({
+      method: 'POST',
+      url: API_URL,
+      anonymous: true,
+      timeout: 10000,
+      headers: {
+        'Content-Type': 'application/json;charset=UTF-8',
+        'Accept': 'application/json, text/plain, */*'
+      },
+      data: JSON.stringify(body),
+      onload: (r) => {
+        try {
+          if (r.status >= 200 && r.status < 300) {
+            const j = JSON.parse(r.responseText);
+            const rows = pickList(j);
+            if (rows.length >= 2) savePayload(rows, API_URL, 'tampermonkey-poll');
+            else publishToPage({ history: [], source: API_URL, mode: 'poll-empty', capturedAt: new Date().toISOString(), diagnostic: { status: r.status, preview: r.responseText.slice(0, 300) } });
+          } else {
+            publishToPage({ history: [], source: API_URL, mode: 'poll-error', capturedAt: new Date().toISOString(), diagnostic: { status: r.status, preview: r.responseText.slice(0, 300) } });
+          }
+        } catch (e) {
+          publishToPage({ history: [], source: API_URL, mode: 'poll-parse-error', capturedAt: new Date().toISOString(), diagnostic: { error: e.message } });
+        }
+        schedulePoll();
+      },
+      onerror: () => { publishToPage({ history: [], source: API_URL, mode: 'poll-network-error', capturedAt: new Date().toISOString() }); schedulePoll(); },
+      ontimeout: () => { publishToPage({ history: [], source: API_URL, mode: 'poll-timeout', capturedAt: new Date().toISOString() }); schedulePoll(); }
+    });
   }
 
-  window.addEventListener('message', (ev) => {
-    if (ev.origin !== DASH_ORIGIN) return;
-    const msg = ev.data;
-    if (!msg || msg.type !== 'WINGO_DASHBOARD_READY') return;
-    dashboardWindow = ev.source;
-    dashboardReady = true;
-    if (lastPayload) postPayload(lastPayload);
-    renderBadge(lastPayload?.history?.length || 0);
-  });
-
-  function openDashboard() {
-    dashboardReady = false;
-    dashboardWindow = window.open(DASH_URL, 'wingoDashboard');
-    let tries = 0;
-    const retry = setInterval(() => {
-      tries++;
-      if (!dashboardWindow || dashboardWindow.closed || dashboardReady || tries >= 15) {
-        clearInterval(retry);
-        return;
-      }
-      try {
-        dashboardWindow.postMessage({ type: 'WINGO_WIN_GO_HELLO' }, DASH_ORIGIN);
-      } catch {}
-    }, 500);
+  function schedulePoll() {
+    if (pollTimer) clearTimeout(pollTimer);
+    if (!stopped && isDashboard) pollTimer = setTimeout(pollApi, 5000);
   }
 
-  function renderBadge(count) {
+  function renderBadge() {
     const mount = () => {
       let box = document.getElementById('__wingoLiveSyncBox');
       if (!box) {
         box = document.createElement('div');
         box.id = '__wingoLiveSyncBox';
-        Object.assign(box.style, {
-          position:'fixed', right:'12px', bottom:'12px', zIndex:2147483647,
-          background:'#0d1b2d', color:'#fff', padding:'10px 12px', border:'1px solid #5aa9ff',
-          borderRadius:'10px', font:'13px system-ui', boxShadow:'0 8px 24px rgba(0,0,0,.35)'
-        });
-        const label = document.createElement('span');
-        label.id = '__wingoLiveSyncLabel';
-        const btn = document.createElement('button');
-        btn.textContent = 'Buka Dashboard';
+        Object.assign(box.style, {position:'fixed',right:'12px',bottom:'12px',zIndex:2147483647,background:'#0d1b2d',color:'#fff',padding:'10px 12px',border:'1px solid #5aa9ff',borderRadius:'10px',font:'13px system-ui',boxShadow:'0 8px 24px rgba(0,0,0,.35)'});
+        const label = document.createElement('span'); label.id='__wingoLiveSyncLabel';
+        const btn = document.createElement('button'); btn.textContent='Buka Dashboard';
         Object.assign(btn.style,{marginLeft:'8px',background:'#5aa9ff',border:'0',padding:'7px 10px',borderRadius:'7px',fontWeight:'700',cursor:'pointer'});
-        btn.onclick = openDashboard;
-        box.append(label, btn);
-        document.body.appendChild(box);
+        btn.onclick=()=>window.open(DASH_URL,'wingoDashboard');
+        box.append(label,btn); document.body.appendChild(box);
       }
-      const label = document.getElementById('__wingoLiveSyncLabel');
-      if (label) {
-        const state = dashboardReady ? 'tersambung' : 'aktif';
-        label.textContent = `Live Sync ${state} • ${count} history`;
-      }
+      const label=document.getElementById('__wingoLiveSyncLabel');
+      if(label) label.textContent=`Live Sync aktif • ${latestCount} history`;
     };
-    if (document.body) mount(); else document.addEventListener('DOMContentLoaded', mount, { once:true });
+    if(document.body) mount(); else document.addEventListener('DOMContentLoaded',mount,{once:true});
   }
 
-  function handleJson(j, url) {
-    const rows = pickList(j);
-    if (rows.length < 2) return;
-    sendToDashboard({
-      history: rows.slice(0, 100),
-      source: url,
-      capturedAt: new Date().toISOString()
-    });
+  if (isWinGo) {
+    const handleJson = (j,url) => { const rows=pickList(j); if(rows.length>=2) savePayload(rows,url,'wingo-capture'); };
+    const of=window.fetch;
+    window.fetch=async function(...args){const r=await of.apply(this,args);try{const url=typeof args[0]==='string'?args[0]:args[0]?.url||'fetch';handleJson(JSON.parse(await r.clone().text()),url)}catch{}return r;};
+    const XO=XMLHttpRequest.prototype.open, XS=XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open=function(m,u,...rest){this.__wingoSyncUrl=u;return XO.call(this,m,u,...rest)};
+    XMLHttpRequest.prototype.send=function(body){this.addEventListener('load',()=>{try{handleJson(JSON.parse(this.responseText),this.__wingoSyncUrl||'xhr')}catch{}});return XS.call(this,body)};
+    renderBadge();
   }
 
-  const originalFetch = window.fetch;
-  window.fetch = async function(...args) {
-    const r = await originalFetch.apply(this, args);
-    try {
-      const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || 'fetch';
-      const text = await r.clone().text();
-      handleJson(JSON.parse(text), url);
-    } catch {}
-    return r;
-  };
-
-  const originalOpen = XMLHttpRequest.prototype.open;
-  const originalSend = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-    this.__wingoSyncUrl = url;
-    return originalOpen.call(this, method, url, ...rest);
-  };
-  XMLHttpRequest.prototype.send = function(body) {
-    this.addEventListener('load', () => {
-      try { handleJson(JSON.parse(this.responseText), this.__wingoSyncUrl || 'xhr'); } catch {}
-    });
-    return originalSend.call(this, body);
-  };
-
-  renderBadge(0);
+  if (isDashboard) {
+    GM_addValueChangeListener(STORE_KEY, (_k,_old,val) => { if (val?.history) publishToPage(val); });
+    Promise.resolve(GM_getValue(STORE_KEY, null)).then(v => { if(v?.history) publishToPage(v); });
+    window.addEventListener('load', () => { stopped=false; pollApi(); });
+    document.addEventListener('visibilitychange', () => { if(!document.hidden){ stopped=false; pollApi(); } });
+    window.addEventListener('beforeunload', () => { stopped=true; if(pollTimer) clearTimeout(pollTimer); });
+  }
 })();
