@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         WinGo Live Sync
 // @namespace    https://wingo-history-inspector-gh238640-1159s-projects.vercel.app
-// @version      1.0.0
-// @description  Capture public WinGo history from your browser session and sync it to the dashboard tab. No cookies/tokens are sent.
+// @version      1.1.0
+// @description  Capture public WinGo history from your browser session and sync it live to the dashboard tab. No cookies/tokens are sent.
 // @match        https://55u3gpn.com/*
 // @run-at       document-start
 // @grant        none
@@ -17,6 +17,7 @@
   const DASH_ORIGIN = 'https://wingo-history-inspector-gh238640-1159s-projects.vercel.app';
   let dashboardWindow = null;
   let lastPayload = null;
+  let dashboardReady = false;
 
   const pickList = (j) => {
     const candidates = [j?.data?.list, j?.data?.data?.list, j?.list, j?.data, j?.result?.list];
@@ -33,12 +34,44 @@
     })).filter(x => (x.issueNumber != null || x.period != null) && x.number != null);
   };
 
+  function postPayload(payload) {
+    if (!payload || !dashboardWindow || dashboardWindow.closed) return false;
+    try {
+      dashboardWindow.postMessage({ type: 'WINGO_HISTORY_SYNC', payload }, DASH_ORIGIN);
+      return true;
+    } catch { return false; }
+  }
+
   function sendToDashboard(payload) {
     lastPayload = payload;
-    if (dashboardWindow && !dashboardWindow.closed) {
-      try { dashboardWindow.postMessage({ type: 'WINGO_HISTORY_SYNC', payload }, DASH_ORIGIN); } catch {}
-    }
+    if (dashboardReady) postPayload(payload);
     renderBadge(payload.history.length);
+  }
+
+  window.addEventListener('message', (ev) => {
+    if (ev.origin !== DASH_ORIGIN) return;
+    const msg = ev.data;
+    if (!msg || msg.type !== 'WINGO_DASHBOARD_READY') return;
+    dashboardWindow = ev.source;
+    dashboardReady = true;
+    if (lastPayload) postPayload(lastPayload);
+    renderBadge(lastPayload?.history?.length || 0);
+  });
+
+  function openDashboard() {
+    dashboardReady = false;
+    dashboardWindow = window.open(DASH_URL, 'wingoDashboard');
+    let tries = 0;
+    const retry = setInterval(() => {
+      tries++;
+      if (!dashboardWindow || dashboardWindow.closed || dashboardReady || tries >= 15) {
+        clearInterval(retry);
+        return;
+      }
+      try {
+        dashboardWindow.postMessage({ type: 'WINGO_WIN_GO_HELLO' }, DASH_ORIGIN);
+      } catch {}
+    }, 500);
   }
 
   function renderBadge(count) {
@@ -57,15 +90,15 @@
         const btn = document.createElement('button');
         btn.textContent = 'Buka Dashboard';
         Object.assign(btn.style,{marginLeft:'8px',background:'#5aa9ff',border:'0',padding:'7px 10px',borderRadius:'7px',fontWeight:'700',cursor:'pointer'});
-        btn.onclick = () => {
-          dashboardWindow = window.open(DASH_URL, 'wingoDashboard');
-          setTimeout(() => { if (lastPayload) sendToDashboard(lastPayload); }, 1200);
-        };
+        btn.onclick = openDashboard;
         box.append(label, btn);
         document.body.appendChild(box);
       }
       const label = document.getElementById('__wingoLiveSyncLabel');
-      if (label) label.textContent = `Live Sync aktif • ${count} history`;
+      if (label) {
+        const state = dashboardReady ? 'tersambung' : 'aktif';
+        label.textContent = `Live Sync ${state} • ${count} history`;
+      }
     };
     if (document.body) mount(); else document.addEventListener('DOMContentLoaded', mount, { once:true });
   }
