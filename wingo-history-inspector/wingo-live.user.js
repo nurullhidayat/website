@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         WinGo Live Sync
 // @namespace    https://wingo-history-inspector.vercel.app
-// @version      1.2.0
-// @description  Live WinGo history sync with Tampermonkey background polling from the dashboard. No login cookies or auth tokens are read.
+// @version      1.3.0
+// @description  Live WinGo history sync with Tampermonkey background polling plus private cloud history backup in Supabase. No login cookies or auth tokens are read.
 // @match        https://55u3gpn.com/*
 // @match        https://wingo-history-inspector.vercel.app/*
 // @match        https://wingo-history-inspector-gh238640-1159s-projects.vercel.app/*
@@ -12,6 +12,7 @@
 // @grant        GM_getValue
 // @grant        GM_addValueChangeListener
 // @connect      api.55fiveapi.com
+// @connect      kqybkatzigncurofxuuv.supabase.co
 // @require      https://cdn.jsdelivr.net/npm/crypto-js@4.2.0/crypto-js.min.js
 // ==/UserScript==
 
@@ -21,11 +22,15 @@
   const API_URL = 'https://api.55fiveapi.com/api/webapi/GetNoaverageEmerdList';
   const DASH_URL = 'https://wingo-history-inspector.vercel.app/';
   const STORE_KEY = 'wingo_latest_payload_v2';
+  const CLOUD_PERIOD_KEY = 'wingo_cloud_last_period_v1';
+  const CLOUD_URL = 'https://kqybkatzigncurofxuuv.supabase.co/functions/v1/ingest-wingo-history';
+  const CLOUD_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtxeWJrYXR6aWduY3Vyb2Z4dXV2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg4MDA1NjYsImV4cCI6MjEwNDM3NjU2Nn0.fmEu3OMshxuSJLwveVKLu2X1bGyLGG6Zqq6mEKSMVO8';
   const isWinGo = location.hostname === '55u3gpn.com';
   const isDashboard = location.hostname.includes('wingo-history-inspector');
   let stopped = false;
   let pollTimer = null;
   let latestCount = 0;
+  let cloudBusy = false;
 
   const pickList = (j) => {
     const candidates = [j?.data?.list, j?.data?.data?.list, j?.list, j?.data, j?.result?.list];
@@ -66,6 +71,49 @@
     return body;
   }
 
+  function publishToPage(payload) {
+    try {
+      window.postMessage({ type: 'WINGO_TM_SYNC', payload }, location.origin);
+    } catch {}
+  }
+
+  async function cloudSync(payload) {
+    if (!isDashboard || cloudBusy || !payload?.history?.length) return;
+    const newest = String(payload.history[0]?.issueNumber ?? payload.history[0]?.period ?? '');
+    if (!newest) return;
+    const last = await GM_getValue(CLOUD_PERIOD_KEY, '');
+    if (String(last) === newest) return;
+
+    cloudBusy = true;
+    GM_xmlhttpRequest({
+      method: 'POST',
+      url: CLOUD_URL,
+      timeout: 12000,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${CLOUD_ANON_KEY}`,
+        'apikey': CLOUD_ANON_KEY
+      },
+      data: JSON.stringify(payload),
+      onload: async (r) => {
+        cloudBusy = false;
+        if (r.status >= 200 && r.status < 300) {
+          await GM_setValue(CLOUD_PERIOD_KEY, newest);
+          try {
+            const data = JSON.parse(r.responseText || '{}');
+            publishToPage({ ...payload, cloudSync: { ok:true, inserted:data.inserted ?? payload.history.length } });
+          } catch {
+            publishToPage({ ...payload, cloudSync: { ok:true } });
+          }
+        } else {
+          publishToPage({ ...payload, cloudSync: { ok:false, status:r.status, preview:(r.responseText || '').slice(0,180) } });
+        }
+      },
+      onerror: () => { cloudBusy = false; publishToPage({ ...payload, cloudSync: { ok:false, error:'network' } }); },
+      ontimeout: () => { cloudBusy = false; publishToPage({ ...payload, cloudSync: { ok:false, error:'timeout' } }); }
+    });
+  }
+
   function savePayload(rows, source, mode) {
     if (!rows?.length) return;
     latestCount = rows.length;
@@ -76,14 +124,11 @@
       capturedAt: new Date().toISOString()
     };
     GM_setValue(STORE_KEY, payload);
-    if (isDashboard) publishToPage(payload);
+    if (isDashboard) {
+      publishToPage(payload);
+      cloudSync(payload);
+    }
     if (isWinGo) renderBadge();
-  }
-
-  function publishToPage(payload) {
-    try {
-      window.postMessage({ type: 'WINGO_TM_SYNC', payload }, location.origin);
-    } catch {}
   }
 
   function pollApi() {
@@ -154,8 +199,8 @@
   }
 
   if (isDashboard) {
-    GM_addValueChangeListener(STORE_KEY, (_k,_old,val) => { if (val?.history) publishToPage(val); });
-    Promise.resolve(GM_getValue(STORE_KEY, null)).then(v => { if(v?.history) publishToPage(v); });
+    GM_addValueChangeListener(STORE_KEY, (_k,_old,val) => { if (val?.history) { publishToPage(val); cloudSync(val); } });
+    Promise.resolve(GM_getValue(STORE_KEY, null)).then(v => { if(v?.history) { publishToPage(v); cloudSync(v); } });
     window.addEventListener('load', () => { stopped=false; pollApi(); });
     document.addEventListener('visibilitychange', () => { if(!document.hidden){ stopped=false; pollApi(); } });
     window.addEventListener('beforeunload', () => { stopped=true; if(pollTimer) clearTimeout(pollTimer); });
