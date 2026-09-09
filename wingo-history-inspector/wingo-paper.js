@@ -4,10 +4,10 @@
   const HISTORY_KEY = 'wingo_live_history_v1';
   const PAPER_KEY = 'wingo_paper_predictions_v1';
   const REFRESH_MS = 5000;
+  const MODEL_NAMES = ['Global', 'Recent20', 'Recent50', 'Recent100', 'Markov1', 'Markov2'];
   let lastFingerprint = '';
 
   const safeNum = v => Number.isFinite(Number(v));
-  const clamp01 = v => Math.max(0, Math.min(1, v));
 
   function readHistory() {
     try {
@@ -19,10 +19,7 @@
   function rowsFromHistory(history) {
     return history
       .filter(x => safeNum(x.number) && (x.issueNumber != null || x.period != null))
-      .map(x => ({
-        period: String(x.issueNumber ?? x.period),
-        number: Number(x.number)
-      }))
+      .map(x => ({ period: String(x.issueNumber ?? x.period), number: Number(x.number) }))
       .filter(x => Number.isInteger(x.number) && x.number >= 0 && x.number <= 9)
       .sort((a, b) => a.period.localeCompare(b.period));
   }
@@ -116,9 +113,8 @@
     return probs.map((p, d) => ({ d, p })).sort((a, b) => b.p - a.p || a.d - b.d);
   }
 
-  function ensemble(rows) {
-    const reg = regime(rows);
-    const models = [
+  function buildModels(rows) {
+    return [
       { name: 'Global', p: freqDist(rows, 0) },
       { name: 'Recent20', p: freqDist(rows, 20) },
       { name: 'Recent50', p: freqDist(rows, 50) },
@@ -126,44 +122,135 @@
       { name: 'Markov1', p: markov1Dist(rows) },
       { name: 'Markov2', p: markov2Dist(rows) }
     ];
+  }
 
-    let w;
-    if (reg.code === 'SHIFT') w = [0.05, 0.30, 0.25, 0.15, 0.20, 0.05];
-    else if (reg.code === 'WATCH') w = [0.10, 0.25, 0.25, 0.15, 0.20, 0.05];
-    else if (reg.code === 'STABLE') w = [0.15, 0.20, 0.20, 0.15, 0.20, 0.10];
-    else w = [0.20, 0.20, 0.25, 0.15, 0.15, 0.05];
+  function baseWeights(reg) {
+    if (reg.code === 'SHIFT') return [0.05, 0.30, 0.25, 0.15, 0.20, 0.05];
+    if (reg.code === 'WATCH') return [0.10, 0.25, 0.25, 0.15, 0.20, 0.05];
+    if (reg.code === 'STABLE') return [0.15, 0.20, 0.20, 0.15, 0.20, 0.10];
+    return [0.20, 0.20, 0.25, 0.15, 0.15, 0.05];
+  }
+
+  function brier(probs, actual) {
+    if (!Array.isArray(probs) || probs.length !== 10) return null;
+    let s = 0;
+    for (let d = 0; d < 10; d++) {
+      const y = d === actual ? 1 : 0;
+      s += (Number(probs[d]) - y) ** 2;
+    }
+    return s;
+  }
+
+  function modelPerformance(paper, lookback = 200) {
+    const settled = paper.filter(x => x.status === 'settled' && x.modelProbs && x.modelTops).slice(-lookback);
+    const out = {};
+    for (const name of MODEL_NAMES) {
+      let n = 0, hits = 0, sumBrier = 0, brierN = 0;
+      for (const p of settled) {
+        const probs = p.modelProbs?.[name];
+        const top = p.modelTops?.[name];
+        if (!Array.isArray(probs) || probs.length !== 10 || p.actual == null || top == null) continue;
+        n++;
+        if (Number(top) === Number(p.actual)) hits++;
+        const br = brier(probs, Number(p.actual));
+        if (br != null && Number.isFinite(br)) { sumBrier += br; brierN++; }
+      }
+      const rawAcc = n ? hits / n : 0.10;
+      const shrunkAcc = (hits + 2) / (n + 20); // prior mean 10%
+      const rawBrier = brierN ? sumBrier / brierN : 0.90;
+      const shrunkBrier = (rawBrier * brierN + 0.90 * 20) / (brierN + 20);
+      out[name] = { n, hits, rawAcc, shrunkAcc, rawBrier, shrunkBrier };
+    }
+    return { settled: settled.length, models: out };
+  }
+
+  function adaptiveWeights(base, perf) {
+    const sampleN = perf.settled;
+    const strength = sampleN < 20 ? 0 : Math.min(0.55, ((sampleN - 20) / 180) * 0.55);
+    const learned = [];
+
+    for (let i = 0; i < MODEL_NAMES.length; i++) {
+      const name = MODEL_NAMES[i];
+      const p = perf.models[name];
+      const accEdge = p.shrunkAcc - 0.10;
+      const brierEdge = 0.90 - p.shrunkBrier;
+      let multiplier = Math.exp(7 * accEdge + 1.8 * brierEdge);
+      multiplier = Math.max(0.60, Math.min(1.65, multiplier));
+      learned.push(base[i] * multiplier);
+    }
+
+    const learnedNorm = normalize(learned);
+    const blended = base.map((x, i) => (1 - strength) * x + strength * learnedNorm[i]);
+    const floor = 0.04;
+    const capped = blended.map(x => Math.max(floor, Math.min(0.45, x)));
+    const final = normalize(capped);
+    return { weights: final, strength };
+  }
+
+  function ensemble(rows, paper) {
+    const reg = regime(rows);
+    const models = buildModels(rows);
+    const base = baseWeights(reg);
+    const perf = modelPerformance(paper);
+    const adapted = adaptiveWeights(base, perf);
+    const w = adapted.weights;
 
     const out = Array(10).fill(0);
     for (let m = 0; m < models.length; m++) {
       for (let d = 0; d < 10; d++) out[d] += w[m] * models[m].p[d];
     }
+
     const probs = normalize(out);
     const ranked = rank(probs);
     const top1 = ranked[0].d;
-    const modelTops = models.map(m => rank(m.p)[0].d);
-    const agreement = modelTops.filter(x => x === top1).length;
+    const modelTops = {};
+    const modelProbs = {};
+    const weightMap = {};
+    let agreement = 0;
+
+    for (let m = 0; m < models.length; m++) {
+      const name = models[m].name;
+      const mt = rank(models[m].p)[0].d;
+      modelTops[name] = mt;
+      modelProbs[name] = models[m].p.map(x => Number(x.toFixed(6)));
+      weightMap[name] = Number(w[m].toFixed(6));
+      if (mt === top1) agreement++;
+    }
+
     const margin = ranked[0].p - ranked[1].p;
     const spread = ranked[0].p - ranked[9].p;
-
     let confidence = 'Sangat rendah';
-    if (agreement >= 5 && margin >= 0.015 && spread >= 0.035) confidence = 'Rendah';
-    if (agreement === 6 && margin >= 0.025 && spread >= 0.05) confidence = 'Sedang (paper only)';
+    if (agreement >= 4 && margin >= 0.010 && spread >= 0.025) confidence = 'Rendah';
+    if (agreement >= 5 && margin >= 0.018 && spread >= 0.040 && perf.settled >= 50) confidence = 'Sedang (paper only)';
 
-    return { probs, ranked, models, weights: w, agreement, margin, spread, confidence, regime: reg };
+    return {
+      probs, ranked, models, weights: w, weightMap, modelTops, modelProbs,
+      agreement, margin, spread, confidence, regime: reg,
+      learningRounds: perf.settled, adaptStrength: adapted.strength, performance: perf
+    };
   }
 
   function settlePredictions(paper, rows) {
     const actual = new Map(rows.map(r => [r.period, r.number]));
     let changed = false;
     for (const p of paper) {
-      if (p.status !== 'pending') continue;
-      if (!actual.has(p.period)) continue;
+      if (p.status !== 'pending' || !actual.has(p.period)) continue;
       const n = actual.get(p.period);
       p.actual = n;
       p.hit1 = Number(p.top1) === n;
       p.hit3 = Array.isArray(p.top3) && p.top3.includes(n);
       p.status = 'settled';
       p.settledAt = new Date().toISOString();
+
+      if (p.modelTops && p.modelProbs) {
+        p.modelHits = {};
+        p.modelBrier = {};
+        for (const name of MODEL_NAMES) {
+          if (p.modelTops[name] != null) p.modelHits[name] = Number(p.modelTops[name]) === n;
+          const br = brier(p.modelProbs[name], n);
+          if (br != null) p.modelBrier[name] = Number(br.toFixed(6));
+        }
+      }
       changed = true;
     }
     return changed;
@@ -173,16 +260,16 @@
     if (rows.length < 80) return false;
     const latest = rows[rows.length - 1];
     const target = nextPeriod(latest.period);
-    if (!target || target === '-') return false;
-    if (paper.some(p => p.period === target)) return false;
+    if (!target || target === '-' || paper.some(p => p.period === target)) return false;
 
-    const e = ensemble(rows);
+    const e = ensemble(rows, paper);
     const top3 = e.ranked.slice(0, 3).map(x => x.d);
     paper.push({
       period: target,
       createdAfterPeriod: latest.period,
       createdAt: new Date().toISOString(),
       status: 'pending',
+      mode: 'adaptive-online-v2',
       top1: e.ranked[0].d,
       top3,
       probs: e.probs.map(x => Number(x.toFixed(6))),
@@ -190,7 +277,12 @@
       confidence: e.confidence,
       regime: e.regime.code,
       regimeTv: Number(e.regime.tv.toFixed(6)),
-      spread: Number(e.spread.toFixed(6))
+      spread: Number(e.spread.toFixed(6)),
+      learningRounds: e.learningRounds,
+      adaptStrength: Number(e.adaptStrength.toFixed(6)),
+      weights: e.weightMap,
+      modelTops: e.modelTops,
+      modelProbs: e.modelProbs
     });
     return true;
   }
@@ -240,10 +332,14 @@
         #paperPredictionCard .paper-chip strong{display:block;font-size:22px}
         #paperPredictionCard .paper-chip span{color:var(--muted);font-size:12px}
         #paperPredictionCard .paper-note{margin-top:12px;color:var(--muted);font-size:13px}
-        #paperPredictionCard table{min-width:760px}
+        #paperPredictionCard .weight-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+        #paperPredictionCard .weight-item{border:1px solid var(--line);border-radius:9px;padding:9px;background:#07111f}
+        #paperPredictionCard .weight-item span{display:block;color:var(--muted);font-size:11px}
+        #paperPredictionCard .weight-item b{display:block;margin-top:3px}
+        #paperPredictionCard table{min-width:820px}
         .hit{color:#70e5a8;font-weight:800}.miss{color:#ff9494;font-weight:800}.pending{color:#ffd66b;font-weight:800}
-        @media(max-width:750px){#paperPredictionCard .paper-grid{grid-template-columns:1fr 1fr}}
-        @media(max-width:480px){#paperPredictionCard .paper-grid{grid-template-columns:1fr}}
+        @media(max-width:750px){#paperPredictionCard .paper-grid{grid-template-columns:1fr 1fr}#paperPredictionCard .weight-grid{grid-template-columns:1fr 1fr}}
+        @media(max-width:480px){#paperPredictionCard .paper-grid,#paperPredictionCard .weight-grid{grid-template-columns:1fr}}
       `;
       document.head.appendChild(style);
     }
@@ -254,10 +350,10 @@
     section.innerHTML = `
       <div class="paper-head">
         <div>
-          <h2 style="margin:0">Paper Prediction Lab</h2>
-          <div class="sub">Ensemble + regime detection. Prediksi disimpan sebelum hasil keluar lalu dinilai otomatis.</div>
+          <h2 style="margin:0">Adaptive AI Paper Prediction Lab</h2>
+          <div class="sub">Online ensemble: setiap hasil baru dipakai untuk menilai model dan menyesuaikan bobot ronde berikutnya.</div>
         </div>
-        <span class="paper-badge">SIMULASI / TANPA TARUHAN</span>
+        <span class="paper-badge">SELALU PREDIKSI • PAPER ONLY</span>
       </div>
 
       <div class="paper-grid">
@@ -265,9 +361,15 @@
         <div class="paper-mini"><span>Kandidat top-1</span><b id="paperTop1">-</b></div>
         <div class="paper-mini"><span>Agreement model</span><b id="paperAgreement">-</b></div>
         <div class="paper-mini"><span>Regime</span><b id="paperRegime">-</b></div>
+        <div class="paper-mini"><span>Mode AI</span><b id="paperMode">Adaptive v2</b></div>
+        <div class="paper-mini"><span>Ronde belajar model</span><b id="paperLearning">0</b></div>
+        <div class="paper-mini"><span>Kekuatan adaptasi</span><b id="paperAdapt">0%</b></div>
+        <div class="paper-mini"><span>Status paper</span><b id="paperStatus">Aktif</b></div>
       </div>
 
       <div style="margin-top:14px"><b>Top-3 paper kandidat</b><div id="paperTop3" class="paper-top"></div></div>
+
+      <div style="margin-top:14px"><b>Bobot AI saat ini</b><div id="paperWeights" class="weight-grid"></div></div>
 
       <div class="paper-grid">
         <div class="paper-mini"><span>Paper settled</span><b id="paperSettled">0</b></div>
@@ -284,11 +386,11 @@
 
       <div class="tablewrap" style="margin-top:14px">
         <table>
-          <thead><tr><th>Period</th><th>Pred Top-1</th><th>Top-3</th><th>Actual</th><th>Hasil</th><th>Regime</th></tr></thead>
-          <tbody id="paperRows"><tr><td colspan="6" class="sub">Belum ada paper prediction.</td></tr></tbody>
+          <thead><tr><th>Period</th><th>Pred Top-1</th><th>Top-3</th><th>Actual</th><th>Hasil</th><th>Agreement</th><th>Learning</th><th>Regime</th></tr></thead>
+          <tbody id="paperRows"><tr><td colspan="8" class="sub">Belum ada paper prediction.</td></tr></tbody>
         </table>
       </div>
-      <div class="paper-note">Panel ini sengaja tidak memberi instruksi taruhan. Tujuannya membuktikan apakah model benar-benar mengalahkan baseline pada data baru, bukan memilih pola setelah hasil sudah diketahui.</div>
+      <div class="paper-note">AI paper ini sengaja membuat prediksi setiap ronde agar proses belajar tidak terlalu banyak SKIP. Ini tetap eksperimen statistik, bukan jaminan dan bukan instruksi taruhan uang asli.</div>
     `;
 
     const analysis = document.getElementById('analysisCard');
@@ -306,15 +408,20 @@
     if (!q('paperTarget')) return;
 
     const latest = rows[rows.length - 1];
-    const current = paper.find(p => p.status === 'pending' && p.period === nextPeriod(latest?.period));
+    const target = nextPeriod(latest?.period);
+    const current = paper.find(p => p.status === 'pending' && p.period === target);
     const st = stats(paper);
+    const liveEnsemble = rows.length >= 80 ? ensemble(rows, paper) : null;
 
     q('paperTarget').textContent = current?.period || '-';
     q('paperTop1').textContent = current ? `${current.top1} • ${current.confidence}` : '-';
     q('paperAgreement').textContent = current ? `${current.agreement}/6` : '-';
 
-    const reg = rows.length ? regime(rows) : { label: '-' };
+    const reg = rows.length ? regime(rows) : { label: '-', tv: 0 };
     q('paperRegime').textContent = current ? `${reg.label} • TV ${reg.tv.toFixed(3)}` : reg.label;
+    q('paperLearning').textContent = liveEnsemble ? liveEnsemble.learningRounds : 0;
+    q('paperAdapt').textContent = liveEnsemble ? pct(liveEnsemble.adaptStrength) : '0%';
+    q('paperStatus').textContent = rows.length >= 80 ? 'Prediksi setiap ronde' : 'Butuh ≥80 history';
 
     q('paperSettled').textContent = st.total;
     q('paper50').textContent = st.r50.n ? `${pct(st.r50.top1)} / ${st.r50.n}` : '-';
@@ -329,21 +436,33 @@
       return `<div class="paper-chip"><span>#${i + 1}</span><strong>${d}</strong><span>${p == null ? '-' : pct(p)}</span></div>`;
     }).join('') : '<span class="sub">Belum ada prediksi aktif.</span>';
 
-    let summary = 'Paper test baru dimulai. Jangan menilai model dari beberapa ronde saja.';
+    const weights = current?.weights || liveEnsemble?.weightMap || {};
+    const perf = liveEnsemble?.performance?.models || {};
+    q('paperWeights').innerHTML = MODEL_NAMES.map(name => {
+      const w = weights[name];
+      const p = perf[name];
+      const acc = p?.n ? `${pct(p.rawAcc)} / ${p.n}` : 'belum cukup';
+      return `<div class="weight-item"><span>${esc(name)} • akurasi ${acc}</span><b>${w == null ? '-' : pct(w)}</b></div>`;
+    }).join('');
+
+    let summary = 'AI membuat paper prediction setiap ronde. Bobot masih dekat prior sampai cukup banyak hasil adaptif terkumpul.';
+    if (liveEnsemble && liveEnsemble.learningRounds >= 20) {
+      summary = `Adaptive learning aktif dari ${liveEnsemble.learningRounds} ronde yang punya jejak tiap model. Bobot digeser berdasarkan akurasi dan Brier score, tetapi dibatasi agar satu model tidak mendominasi karena kebetulan.`;
+    }
     if (st.r100.n >= 100) {
       const delta = st.r100.top1 - 0.10;
-      if (delta >= 0.04) summary = `Rolling-100 top-1 berada ${pct(delta)} poin di atas baseline. Tetap perlu ratusan ronde tambahan untuk memastikan ini bukan kebetulan.`;
-      else if (delta >= 0.015) summary = `Rolling-100 sedikit di atas baseline (+${pct(delta)} poin), tetapi belum cukup kuat untuk disebut edge stabil.`;
-      else summary = `Rolling-100 belum menunjukkan keunggulan bermakna terhadap baseline 10% (${pct(st.r100.top1)}).`;
+      if (delta >= 0.04) summary += ` Rolling-100 top-1 ${pct(st.r100.top1)}, ${pct(delta)} poin di atas baseline.`;
+      else if (delta >= 0.015) summary += ` Rolling-100 sedikit di atas baseline (${pct(st.r100.top1)}), belum cukup kuat untuk disebut edge stabil.`;
+      else summary += ` Rolling-100 belum mengalahkan baseline secara bermakna (${pct(st.r100.top1)}).`;
     }
-    if (reg.code === 'SHIFT') summary += ' Regime terbaru berubah cukup besar, jadi hasil model lama tidak boleh langsung dianggap berlaku.';
+    if (reg.code === 'SHIFT') summary += ' Regime terbaru berubah; AI otomatis lebih berat ke window pendek dan Markov1.';
     q('paperSummary').textContent = summary;
 
     const recent = paper.slice(-20).reverse();
     q('paperRows').innerHTML = recent.length ? recent.map(p => {
       const result = p.status === 'pending' ? '<span class="pending">PENDING</span>' : p.hit1 ? '<span class="hit">TOP-1 HIT</span>' : p.hit3 ? '<span class="hit">TOP-3 HIT</span>' : '<span class="miss">MISS</span>';
-      return `<tr><td><code>${esc(p.period)}</code></td><td>${esc(p.top1)}</td><td>${esc((p.top3 || []).join(', '))}</td><td>${p.actual == null ? '-' : esc(p.actual)}</td><td>${result}</td><td>${esc(p.regime || '-')}</td></tr>`;
-    }).join('') : '<tr><td colspan="6" class="sub">Belum ada paper prediction.</td></tr>';
+      return `<tr><td><code>${esc(p.period)}</code></td><td>${esc(p.top1)}</td><td>${esc((p.top3 || []).join(', '))}</td><td>${p.actual == null ? '-' : esc(p.actual)}</td><td>${result}</td><td>${esc(p.agreement ?? '-')}/6</td><td>${esc(p.learningRounds ?? 0)}</td><td>${esc(p.regime || '-')}</td></tr>`;
+    }).join('') : '<tr><td colspan="8" class="sub">Belum ada paper prediction.</td></tr>';
   }
 
   function refresh() {
