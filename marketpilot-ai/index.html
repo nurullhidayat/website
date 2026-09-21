@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#09111f" />
+  <title>MarketPilot AI</title>
+  <meta name="description" content="Dashboard analisis teknikal crypto berbasis data Binance." />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js"></script>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand"><div class="brand-mark">MP</div><div><strong>MarketPilot</strong><span>AI Market Lab</span></div></div>
+      <nav>
+        <button class="nav-item active" data-view="dashboard"><span>⌁</span> Dashboard</button>
+        <button class="nav-item" data-view="history"><span>◷</span> Riwayat</button>
+        <button class="nav-item" data-view="settings"><span>⚙</span> Pengaturan</button>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="status-row"><span class="status-dot"></span><span>Binance Public Data</span></div>
+        <p>Bukan nasihat keuangan. Analisis dapat salah; selalu kelola risiko.</p>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="mobile-menu" id="mobileMenu">☰</button>
+        <div><p class="eyebrow">AI-ASSISTED MARKET ANALYSIS</p><h1 id="pageTitle">Dashboard</h1></div>
+        <div class="top-actions"><span class="pill subtle" id="providerBadge">AI Provider: belum terhubung</span><button class="icon-btn" data-view="settings">⚙</button></div>
+      </header>
+
+      <section class="view active" id="view-dashboard">
+        <div class="market-toolbar card">
+          <div class="control-group"><label>Market</label><select id="symbolSelect"><option>BTCUSDT</option><option>ETHUSDT</option><option>BNBUSDT</option><option>SOLUSDT</option><option>XRPUSDT</option></select></div>
+          <div class="control-group grow"><label>Timeframe</label><div class="tf-group" id="tfGroup"><button data-tf="5m">5m</button><button data-tf="15m" class="active">15m</button><button data-tf="1h">1h</button><button data-tf="4h">4h</button><button data-tf="1d">1D</button></div></div>
+          <button class="primary" id="analyzeBtn">✦ Analisa Sekarang</button>
+        </div>
+
+        <div class="market-summary" id="marketSummary">
+          <div class="metric card"><span>Harga</span><strong id="price">—</strong><small id="priceTime">Memuat…</small></div>
+          <div class="metric card"><span>24h</span><strong id="change24">—</strong><small>Perubahan harga</small></div>
+          <div class="metric card"><span>High 24h</span><strong id="high24">—</strong><small id="low24">Low —</small></div>
+          <div class="metric card"><span>Volume 24h</span><strong id="vol24">—</strong><small>Quote volume</small></div>
+        </div>
+
+        <div class="dashboard-grid">
+          <div class="chart-card card">
+            <div class="card-head"><div><h2 id="chartTitle">BTCUSDT · 15m</h2><p>Real-time-ish public market data dari Binance</p></div><div class="legend"><span><i class="dot ema20"></i>EMA 20</span><span><i class="dot ema50"></i>EMA 50</span></div></div>
+            <div id="chart"></div>
+            <div class="chart-loading" id="chartLoading">Memuat candle…</div>
+          </div>
+
+          <div class="analysis-card card">
+            <div class="card-head"><div><h2>Analisis</h2><p id="analysisLabel">Analisis Teknis Otomatis</p></div><span class="decision wait" id="decisionBadge">WAIT</span></div>
+            <div class="analysis-hero">
+              <div><span>Bias</span><strong id="bias">Netral</strong></div>
+              <div><span>Confidence analitis <button class="tip" data-tip="Skor konsistensi sinyal indikator. Bukan probabilitas menang.">?</button></span><strong id="confidence">—</strong></div>
+              <div><span>Risk : Reward <button class="tip" data-tip="Perbandingan potensi profit terhadap risiko sampai Stop Loss.">?</button></span><strong id="rr">—</strong></div>
+            </div>
+            <div class="levels">
+              <div><span>Entry Zone</span><strong id="entry">—</strong></div>
+              <div><span>Stop Loss</span><strong id="sl">—</strong></div>
+              <div><span>TP1</span><strong id="tp1">—</strong></div>
+              <div><span>TP2</span><strong id="tp2">—</strong></div>
+              <div><span>TP3</span><strong id="tp3">—</strong></div>
+              <div><span>Invalidation <button class="tip" data-tip="Kondisi/harga yang membuat ide setup tidak lagi valid.">?</button></span><strong id="invalidation">—</strong></div>
+            </div>
+            <div class="indicator-grid">
+              <div><span>RSI 14 <button class="tip" data-tip="Momentum 0–100. Area sekitar >70 sering dianggap overbought, <30 oversold.">?</button></span><strong id="rsi">—</strong></div>
+              <div><span>ATR 14 <button class="tip" data-tip="Average True Range mengukur volatilitas, bukan arah harga.">?</button></span><strong id="atr">—</strong></div>
+              <div><span>Support</span><strong id="support">—</strong></div>
+              <div><span>Resistance</span><strong id="resistance">—</strong></div>
+            </div>
+            <div class="analysis-text"><h3>Ringkasan</h3><p id="summaryText">Tekan “Analisa Sekarang” setelah candle selesai dimuat.</p><h3>Alasan utama</h3><ul id="reasonList"><li>Belum ada analisis.</li></ul><h3>Tunggu kondisi ini</h3><p id="waitFor">—</p></div>
+            <div class="analysis-meta"><span id="analysisTime">Belum dianalisis</span><span id="analysisTF">15m</span></div>
+          </div>
+        </div>
+
+        <div class="bottom-grid">
+          <div class="card risk-card"><div class="card-head"><div><h2>Kalkulator Risiko</h2><p>Perkirakan ukuran posisi berdasarkan entry & stop loss.</p></div></div><div class="risk-form"><label>Saldo akun (USDT)<input id="balance" type="number" min="0" value="1000" /></label><label>Risiko maksimum (%)<input id="riskPct" type="number" min="0.1" max="100" step="0.1" value="1" /></label><div class="risk-result"><span>Nominal risiko</span><strong id="riskAmount">$10.00</strong></div><div class="risk-result"><span>Estimasi position size</span><strong id="positionSize">—</strong></div></div></div>
+          <div class="card quick-card"><div class="card-head"><div><h2>Snapshot Indikator</h2><p>Nilai terbaru dari candle timeframe terpilih.</p></div></div><div class="quick-stats"><div><span>EMA 20</span><strong id="ema20">—</strong></div><div><span>EMA 50</span><strong id="ema50">—</strong></div><div><span>Rel. Volume</span><strong id="relVol">—</strong></div><div><span>Trend</span><strong id="trend">—</strong></div></div></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-history">
+        <div class="section-head"><div><h2>Riwayat Analisis</h2><p>Tersimpan lokal di browser ini.</p></div><button class="danger ghost" id="clearHistory">Hapus Semua</button></div>
+        <div class="history-wrap card"><div id="historyEmpty" class="empty-state"><strong>Belum ada riwayat</strong><span>Analisis yang kamu buat akan muncul di sini.</span></div><div class="history-list" id="historyList"></div></div>
+      </section>
+
+      <section class="view" id="view-settings">
+        <div class="settings-grid">
+          <div class="card settings-card"><div class="card-head"><div><h2>AI Provider</h2><p>Arsitektur siap dihubungkan ke model AI melalui server Vercel.</p></div><span class="pill warning">Belum terhubung</span></div><div class="setting-row"><div><strong>Status</strong><span>MVP saat ini memakai mesin Analisis Teknis Otomatis di browser.</span></div><span class="status-value">Fallback aktif</span></div><div class="setting-row"><div><strong>Keamanan API Key</strong><span>API key wajib disimpan sebagai Environment Variable di Vercel dan dipanggil melalui server route.</span></div><span class="status-value good">Aman</span></div><div class="note">Jangan pernah menyimpan API key model AI di JavaScript client atau localStorage.</div></div>
+          <div class="card settings-card"><div class="card-head"><div><h2>Data Source</h2><p>Sumber market publik.</p></div><span class="pill good">Aktif</span></div><div class="setting-row"><div><strong>Binance Spot</strong><span>Klines, ticker 24h, high/low, volume.</span></div><span class="status-value good">Public API</span></div><div class="setting-row"><div><strong>Auto refresh</strong><span>Ticker ~10 detik; candle ~30 detik.</span></div><span class="status-value">Aktif</span></div></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="./app.js"></script>
+</body>
+</html>
